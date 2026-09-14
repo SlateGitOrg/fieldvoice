@@ -2,9 +2,7 @@
 
 > Offline speech-to-structured field reports evaluated on entity error rate, not word error rate - because only the part numbers matter.
 
-> ### No speech recogniser, by design of the environment
->
-> This repository contains **no ASR runtime, no audio, no model weights and
+> **Implementation note.** This repository contains **no ASR runtime, no audio, no model weights and
 > no network access**. Hypotheses come from a deterministic, seeded
 > **simulated ASR backend** sitting behind the `AsrBackend` interface: it
 > takes a reference transcript plus a noise / accent / domain-vocabulary
@@ -13,9 +11,14 @@
 > spell-out of domain identifiers.
 >
 > What is real, and what the test suite attacks, is the **interface and the
-> evaluation** - the Levenshtein WER, the typed entity extraction, and the
-> entity error rate. Dropping a real whisper.cpp binding in behind
-> `AsrBackend` would change nothing else in the repo.
+> evaluation** - the Levenshtein WER, the typed entity extraction, the
+> entity error rate - plus a real **catalogue-constrained decoding pass**
+> (`src/decoding.py`) that snaps, re-composes or routes identifiers. That
+> pass works on recogniser *text*; with whisper.cpp the same catalogue would
+> become a grammar / logit mask inside decoding. Dropping a real binding in
+> behind `AsrBackend` changes nothing else. The target (real whisper.cpp,
+> Common Voice / self-recorded audio, Ollama structuring, SQLite sync, PWA)
+> is not implemented here.
 
 `FLAGSHIP` · **AI / ML Engineering** · Advanced · ~4-5 weeks · Energy - wind turbine maintenance crews
 
@@ -78,8 +81,9 @@ src/entities.py    typed field extraction (IDs, quantities+units, dates, places)
 src/metrics.py     WER by Levenshtein DP + entity error rate, per type
 src/asr.py         AsrBackend interface + deterministic simulated recogniser
 src/generator.py   synthetic field reports with PLANTED ground-truth entities
+src/decoding.py    catalogue-constrained decoding: snap / re-compose / route
 src/demo.py        the 60-second artefact
-tests/             62 tests
+tests/             80 tests
 ```
 
 ## Build plan
@@ -170,9 +174,30 @@ Ranked by WER: `A-general < B-domain`. Ranked by entity error rate:
 `B-domain < A-general`. The flip survives at corpus scale, not only in the
 hand-built sentence.
 
-Suite: **62 tests**, `python -m unittest discover -s tests`, under 1 second.
+### Constrained decoding on the general recogniser's own output
 
-### Limits / caveats
+Same 200 reports, `A-general` hypotheses, catalogue of 590 parts / 178 fault
+codes, with 10 reports carrying a planted part number **not** in the
+catalogue. "wrong" = an incorrect ID written into the record.
+
+| type | decoder | wrong | wrong rate | routed to human | missing | unvalidated |
+|---|---|---|---|---|---|---|
+| PART_ID | none | 63 | 0.315 | 0 | 53 | 63 |
+| PART_ID | naive nearest-snap | 22 | 0.110 | 0 | 0 | 0 |
+| PART_ID | constrained | 3 | 0.015 | 27 | 0 | 0 |
+| FAULT_CODE | none | 65 | 0.325 | 0 | 47 | 55 |
+| FAULT_CODE | naive nearest-snap | 48 | 0.240 | 0 | 2 | 0 |
+| FAULT_CODE | constrained | 10 | 0.050 | 54 | 2 | 0 |
+
+Spell-outs (`gb forty four seventy one`) that the unconstrained system loses
+entirely (53 "missing") are re-composed. The naive snap also emits zero
+unvalidated codes - it passes the validation check - yet writes 7x more wrong
+parts, because it turns every unknown part into a confident known one.
+
+Suite: **80 tests**, `python -m unittest discover -s tests`, about 3 seconds.
+All numbers are measured on the simulated backend, not a real model.
+
+### Limitations
 
 - **The recogniser is simulated.** Absolute error rates here are properties of
   the corruption model, not of any real acoustic model. Only the *relationship*
@@ -188,14 +213,32 @@ Suite: **62 tests**, `python -m unittest discover -s tests`, under 1 second.
 - **The entity error rate is invariant to narrative noise, not to everything.**
   Measured spread across narrative rates 0.05 to 0.45 is under 0.02.
 - **Entity extraction is rule-based** over a closed gazetteer and fixed ID
-  shapes. A real deployment needs the parts catalogue; an ID absent from the
-  catalogue is out of scope here, and confidence gating is not implemented.
+  shapes.
+- **"Never emits an unvalidated part number" holds; "unknown codes always
+  route" does not.** Measured: 9 of 10 planted unknown parts route. The tenth
+  (GB-5161 heard as GB-5151, one slip from catalogued GB-5251) is snapped to a
+  wrong but valid part. No snapping scheme can see that; only acoustic
+  confidence could, and the simulator does not model per-token confidence.
+  Gating here is catalogue evidence (unique radius-1 candidate), not acoustic.
+- **Constrained decoding degrades as the vocabulary fills the ID space.** On a
+  1000-report corpus the fault catalogue covers most of the 900 possible
+  `E-ddd` codes and the constrained FAULT_CODE wrong rate rose to 0.183,
+  against 0.050 on the 200-report corpus. `test_denser_catalogue_degrades_part_class`
+  is the regression that catches a vocabulary change doing this.
+- **Radius 2 is not worse on accuracy, only on workload:** it commits no more
+  wrong parts than radius 1 but routes more than twice as many to a human
+  (`test_radius_two_routes_more`), so radius 1 is the default.
 - **Same-type entities are aligned by order.** Two quantities spoken in the
   wrong order score as two substitutions. That is the right call for a report
   where field order carries meaning, and the wrong one for free-form dictation.
-- **Not implemented from the spec:** constrained decoding itself (there is no
-  decoder), the PWA, deferred sync, and SQLite persistence. The domain-
-  constrained system is represented as a noise profile, not as a beam search.
+- **Two kinds of "domain" system.** `B-domain` in the corpus table is a noise
+  profile; the constrained-decoding table is a real post-pass over
+  `A-general` text. Neither is a beam search. Only identifiers are
+  constrained; quantities, dates and locations are not.
+- **Offline** is asserted by a test that patches out `socket` connect /
+  resolve and runs the pipeline, plus a scan for network imports in `src/`.
+- **Not implemented from the spec:** real ASR, the PWA, deferred sync, SQLite
+  persistence, and the Ollama structuring step.
 
 ## Interview questions this project answers
 
@@ -217,14 +260,14 @@ python -m src.demo                        # the 60-second artefact
 ```
 
 Requires Python 3.11+. The runnable core uses **only the standard
-library** (including `sqlite3`), so there is nothing to install.
+library**, so there is nothing to install.
 
 ## Getting started
 
 ```bash
 git clone <your-fork-url> fieldvoice
 cd fieldvoice
-python -m unittest discover -s tests   # 62 tests, no install, under a second
+python -m unittest discover -s tests   # 80 tests, no install, a few seconds
 python -m src.demo                     # the flip, then the corpus tables
 ```
 

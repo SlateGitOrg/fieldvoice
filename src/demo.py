@@ -133,6 +133,40 @@ def corpus_evaluation() -> None:
     print("Ranked by entity ER: %s" % _rank(results, 1))
 
 
+def constrained_section() -> None:
+    from .decoding import (IDENTIFIER_TYPES, build_catalogue,
+                           constrained_decode, naive_nearest_decode,
+                           score_identifiers, score_raw_identifiers)
+    rule("CONSTRAINED DECODING: A-general output vs parts/fault catalogue")
+    corpus = make_corpus(CORPUS_SIZE)
+    cat, off = build_catalogue(corpus)
+    print("catalogue: %d parts, %d fault codes; %d utterances carry a planted"
+          % (len(cat.parts), len(cat.faults), len(off)))
+    print("part number that is NOT in the catalogue (must be routed).")
+    asr = SimulatedAsr(NARRATIVE_STRONG, seed=SEED)
+    raw, con, nai = {}, {}, {}
+    for k, u in enumerate(corpus):
+        h = asr.transcribe(u.reference)
+        score_raw_identifiers(u.gold, h, cat, raw, k in off)
+        score_identifiers(u.gold, constrained_decode(h, cat), cat, k in off, con)
+        score_identifiers(u.gold, naive_nearest_decode(h, cat), cat, k in off,
+                          nai)
+    print()
+    print("%-11s %-12s %9s %9s %8s %8s %11s" % (
+        "type", "decoder", "wrong", "wrong%", "routed", "missing",
+        "unvalidated"))
+    print("-" * 74)
+    for t in IDENTIFIER_TYPES:
+        for name, acc in (("none", raw), ("naive-snap", nai),
+                          ("constrained", con)):
+            o = acc[t]
+            print("%-11s %-12s %9d %9.3f %8d %8d %11d" % (
+                t, name, o.committed_wrong, o.committed_error_rate, o.routed,
+                o.missing, o.unvalidated))
+    print()
+    print("'wrong' = an incorrect ID written into the maintenance record.")
+
+
 def _rank(results, index) -> str:
     def key(item):
         value = item[1][index]
@@ -152,6 +186,7 @@ def main() -> None:
     print("typed fields extracted from the hypothesis.")
     headline()
     corpus_evaluation()
+    constrained_section()
     print()
     print("Bottom line: WER says A. The maintenance system needs B.")
 
