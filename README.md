@@ -2,128 +2,72 @@
 
 > Offline speech-to-structured field reports evaluated on entity error rate, not word error rate - because only the part numbers matter.
 
-> **Implementation note.** This repository contains **no ASR runtime, no audio, no model weights and
-> no network access**. Hypotheses come from a deterministic, seeded
-> **simulated ASR backend** sitting behind the `AsrBackend` interface: it
-> takes a reference transcript plus a noise / accent / domain-vocabulary
-> profile and emits a realistically corrupted hypothesis using phonetic
-> confusion classes, number and unit mangling, and out-of-vocabulary
-> spell-out of domain identifiers.
->
-> What is real, and what the test suite attacks, is the **interface and the
-> evaluation** - the Levenshtein WER, the typed entity extraction, the
-> entity error rate - plus a real **catalogue-constrained decoding pass**
-> (`src/decoding.py`) that snaps, re-composes or routes identifiers. That
-> pass works on recogniser *text*; with whisper.cpp the same catalogue would
-> become a grammar / logit mask inside decoding. Dropping a real binding in
-> behind `AsrBackend` changes nothing else. The target (real whisper.cpp,
-> Common Voice / self-recorded audio, Ollama structuring, SQLite sync, PWA)
-> is not implemented here.
+[![ci](https://github.com/SlateGitOrg/fieldvoice/actions/workflows/ci.yml/badge.svg)](https://github.com/SlateGitOrg/fieldvoice/actions/workflows/ci.yml)
 
-`FLAGSHIP` · **AI / ML Engineering** · Advanced · ~4-5 weeks · Energy - wind turbine maintenance crews
+## Why
 
-**Primary language:** Python
-**Tags:** `speech`, `offline-ai`, `constrained-decoding`, `evaluation`, `edge`, `whisper`
+A technician at the top of a turbine cannot type a report. They speak it, and later somebody transcribes it into a form. Generic transcription gets the narrative roughly right and mangles exactly the parts that matter (part numbers, torque values, fault codes), which are the only fields the maintenance system consumes. A model with 12% global WER but 0.8% part-number error is far more useful here than one at 6% WER that fluffs every identifier, and only an entity-level metric shows that.
 
----
+> **Scope.** This repository has no ASR runtime, no audio, no model weights and no network access. Hypotheses come from a deterministic, seeded **simulated ASR backend** behind the `AsrBackend` interface, which corrupts a reference transcript using phonetic confusion classes, number and unit mangling, and spell-out of domain identifiers. What is real is the evaluation (Levenshtein WER, typed entity extraction, entity error rate) and a catalogue-constrained decoding pass that works on recogniser text. A real recogniser (for example whisper.cpp, with the catalogue as a grammar or logit mask) would slot in behind `AsrBackend`.
 
-## The problem
+## Features
 
-A technician at the top of a turbine cannot type a report. They speak it, and later somebody transcribes it into a form. Generic transcription gets the narrative roughly right and mangles exactly the parts that matter - part numbers, torque values, fault codes - which are the only fields the maintenance system actually consumes.
+- Word error rate by Levenshtein alignment, with every word error classified as on a scored field or on narrative.
+- Typed entity extraction: part IDs, fault codes, quantities with units, dates and locations.
+- Entity error rate overall and per entity type, so averages cannot hide a weak class.
+- Catalogue-constrained decoding that snaps, re-composes spelled-out digits, or routes to a human, and never emits an unvalidated identifier.
+- A seeded generator of synthetic field reports with planted ground-truth entities, and a seeded simulated recogniser with general and domain noise profiles.
+- Pure Python standard library; the test suite also asserts the pipeline runs with networking disabled.
 
-## ⭐ The differentiator
+## Architecture
 
-Evaluates on **entity-level error rate for the fields that matter, not global WER**, and uses **domain-constrained decoding against a parts-and-fault-code vocabulary** so `GB-4471` cannot be transcribed as 'GB forty-four seventy-one'. A model with 12% global WER but 0.8% part-number error is far more useful here than one at 6% WER that fluffs every identifier - and only the entity-level metric reveals that. Runs fully offline, because there is no connectivity at the top of a turbine.
-
-This is the sentence to lead with when someone asks you to walk through the
-project. Everything else in this repo exists to make it true and to prove it.
-
-## Data
-
-**Common Voice** (CC0) and LibriSpeech for base evaluation, plus a documented generator splicing domain vocabulary into utterances with **known ground-truth entities**, and a small self-recorded domain set.
-
-> No paid API key is required to run or demo this project. Where a paid
-> service would add value it is wired as an optional enhancement behind an
-> interface with an offline mock as the default implementation.
-
-## Stack
-
-- Python
-- whisper.cpp - local, offline, runs on a laptop CPU
-- A local model via Ollama for the structuring step
-- SQLite, Typer CLI plus a minimal PWA
-- Docker, pytest
-
-### Implementation note
-
-The Stack list above names whisper.cpp, an Ollama-hosted local model, Docker
-and pytest. None are available in this environment and none are used. The
-runnable core is **Python standard library only**: `unittest` instead of
-pytest, and a seeded simulated ASR backend instead of whisper.cpp plus Ollama.
-The substitution does not weaken the differentiator, because the
-differentiator is the *metric*, not the acoustic model - the WER
-implementation, the typed entity extraction and the entity error rate are all
-real and are what the suite attacks. A real recogniser would be swapped in
-behind `AsrBackend` without touching `metrics.py` or `entities.py`.
-
-## Core capabilities
-
-- Fully offline transcription with a domain-constrained decoding vocabulary
-- Entity extraction into a strict schema, validated against the parts catalogue
-- Dual metric reporting: global WER *and* per-entity-class error rate
-- Confidence-gated fields flagged for confirmation rather than silently guessed
-- Deferred sync with conflict handling when the crew regains connectivity
-
-## Repository layout
-
-```
-src/entities.py    typed field extraction (IDs, quantities+units, dates, places)
-src/metrics.py     WER by Levenshtein DP + entity error rate, per type
-src/asr.py         AsrBackend interface + deterministic simulated recogniser
-src/generator.py   synthetic field reports with PLANTED ground-truth entities
-src/decoding.py    catalogue-constrained decoding: snap / re-compose / route
-src/demo.py        the 60-second artefact
-tests/             80 tests
+```mermaid
+flowchart LR
+  G["generator.py<br/>synthetic reports + planted entities"] --> A["asr.py<br/>AsrBackend (simulated)"]
+  A --> E["entities.py<br/>typed extraction"]
+  A --> D["decoding.py<br/>catalogue-constrained pass"]
+  D --> E
+  E --> M["metrics.py<br/>WER + entity error rate"]
+  M --> O["demo.py<br/>tables + ranking flip"]
 ```
 
-## Build plan
+The generator produces reports with known entities. The backend turns each reference transcript into a noisy hypothesis. Entities are extracted from the hypothesis (optionally after constrained decoding) and compared with the planted ones. `metrics.py` reports WER and entity error rate side by side. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for design decisions and failure modes.
 
-1. Build the dual-metric evaluation harness before touching the model. The metric is the project.
-2. Baseline unconstrained transcription and measure entity error. It will be bad in a specific, interesting way.
-3. Constrained decoding against the vocabulary, then re-measure.
-4. Offline verification - run the whole thing with networking disabled - then the sync path.
+## Quick start
 
-## Testing strategy
+Requires Python 3.11+. There is nothing to install.
 
-Assert **entity-class error rate below stated thresholds per class**, with a regression suite that fails if a vocabulary change degrades any class. Assert the full pipeline operates **with networking disabled**, which is the deployment condition and therefore a test rather than a claim.
+```bash
+git clone https://github.com/SlateGitOrg/fieldvoice
+cd fieldvoice
+python -m unittest discover -s tests   # 80 tests, about a second
+python -m src.demo                     # the ranking flip, then corpus tables
+```
 
-Tests assert **correctness**, not merely that the code runs. A green suite on
-this repo is a claim about behaviour under adversarial conditions; treat any
-test that would pass against a deliberately broken implementation as a bug in
-the test.
+## Usage
 
-## Quality & safety layer
+`python -m src.demo` prints three sections. The first is a single utterance with two hypotheses:
 
-The system never emits an unvalidated part number. Codes absent from the catalogue route to a confirmation prompt instead of being guessed into a maintenance record.
+```
+metric                        A         B     prefers
+------------------------------------------------------------
+word error rate           0.192     0.231           A
+entity error rate         0.833     0.000           B
+```
 
-## Measurable outcome
+System A gets fewer words wrong, but every error is on a field (`GB-4471` to `GB-4771`, `47 nm` to `47 mm`, ...). System B gets more words wrong, none of them on a field. WER prefers A; the maintenance system needs B.
 
-> Part-number error rate of 4.0% against 56.0% for the unconstrained system,
-> at a *worse* global WER (21.3% against 20.1%) - the field that the
-> maintenance system consumes is 14x better on the transcript WER would have
-> rejected.
+## How it works
 
-(The original spec target was 0.8% against 11%. The numbers above are what
-this repo actually measures against its simulated backend; the shape of the
-result - a large entity-level gap hidden by a flat or adverse WER - is the
-claim, not the specific rates.)
+- **Entity error rate.** Gold entities and predicted entities are aligned per type, in order. Unit-only slips (`nm` to `mm`) count as errors even though the magnitude is right.
+- **Simulated ASR.** `SimulatedAsr` takes a `NoiseProfile` (noise, accent, domain vocabulary) and corrupts consonants and digits, mangles units and dates, and spells identifiers out as words when they are out of vocabulary.
+- **Constrained decoding.** `constrained_decode` first tries to re-compose spelled-out identifiers, then accepts a catalogue match only when it is unique within edit distance 1. Anything else is routed to a human. `naive_nearest_decode` is the baseline that always snaps.
 
-State it in these terms — business units, not technical ones — in your CV
-bullet and in the first thirty seconds of describing the project.
+## Results
 
-## Measured results
+## Results
 
-All numbers below are printed by `python -m src.demo` on this machine.
+All numbers below are printed by `python -m src.demo`.
 
 ### The headline: the ranking flips
 
@@ -194,10 +138,10 @@ entirely (53 "missing") are re-composed. The naive snap also emits zero
 unvalidated codes - it passes the validation check - yet writes 7x more wrong
 parts, because it turns every unknown part into a confident known one.
 
-Suite: **80 tests**, `python -m unittest discover -s tests`, about 3 seconds.
+Suite: **80 tests**, `python -m unittest discover -s tests`, about a second.
 All numbers are measured on the simulated backend, not a real model.
 
-### Limitations
+## Limitations
 
 - **The recogniser is simulated.** Absolute error rates here are properties of
   the corruption model, not of any real acoustic model. Only the *relationship*
@@ -240,51 +184,33 @@ All numbers are measured on the simulated backend, not a real model.
 - **Not implemented from the spec:** real ASR, the PWA, deferred sync, SQLite
   persistence, and the Ollama structuring step.
 
-## Interview questions this project answers
-
-- **Why is WER the wrong metric here?**
-- **How does constrained decoding work?**
-- **What does your system do with a code it does not recognise?**
-
-## What this deliberately is *not*
-
-- Not a general transcription service - the constraint is the point.
-- Not cloud-dependent; the offline requirement drives every design choice.
-
-
-## Run it now
+## Testing
 
 ```bash
-python -m unittest discover -s tests -v   # the suite
-python -m src.demo                        # the 60-second artefact
+python -m unittest discover -s tests -v
 ```
 
-Requires Python 3.11+. The runnable core uses **only the standard
-library**, so there is nothing to install.
+The 80 tests cover the WER and entity error implementations, entity extraction, the simulated backend, the generator, constrained decoding, the single-utterance and corpus-level ranking flips (including the condition under which the corpus-level flip disappears), per-class error thresholds, and a run with `socket` connect and resolve patched out plus a scan of `src/` for network imports.
 
-## Getting started
+## Project layout
 
-```bash
-git clone <your-fork-url> fieldvoice
-cd fieldvoice
-python -m unittest discover -s tests   # 80 tests, no install, a few seconds
-python -m src.demo                     # the flip, then the corpus tables
+```
+src/entities.py    typed field extraction (IDs, quantities + units, dates, places)
+src/metrics.py     WER by Levenshtein DP + entity error rate, per type
+src/asr.py         AsrBackend interface + deterministic simulated recogniser
+src/generator.py   synthetic field reports with planted ground-truth entities
+src/decoding.py    catalogue-constrained decoding: snap / re-compose / route
+src/demo.py        runnable demo that prints the tables above
+tests/             unit and property-style tests
+docs/              architecture notes
 ```
 
-There is nothing to install and nothing to download: no `pip install`, no
-model weights, no Docker, no network.
+## Non-goals
 
-Every path above works on a plain Windows/macOS/Linux laptop with a
-standard Python 3.11+ interpreter and no cloud account.
+- Not a general transcription service; the constraint is the point.
+- Not cloud-dependent; the offline requirement drives the design.
+- No real ASR, PWA, deferred sync, SQLite persistence or local-LLM structuring step.
 
-## Definition of done
-
-- [ ] The differentiator above is implemented, and a test proves it
-- [ ] The measurable outcome is produced by a command anyone can run
-- [ ] `README` explains the one decision a generic version gets wrong
-- [ ] CI runs the full suite on every push and is green on `main`
-- [ ] A recruiter can see the headline artefact in under 60 seconds
-
-## Licence
+## License
 
 MIT — see [LICENSE](LICENSE).
