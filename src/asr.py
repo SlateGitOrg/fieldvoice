@@ -8,9 +8,8 @@ phonetic confusion classes, number and unit mangling, and out-of-vocabulary
 spell-out of domain identifiers.
 
 The simulator stands in for the acoustic model.  The things under test are
-the INTERFACE and the EVALUATION, which is where the differentiator lives and
-which would be unchanged if a real whisper.cpp binding were dropped in behind
-``AsrBackend``.
+the INTERFACE and the EVALUATION, which would be unchanged if a real
+whisper.cpp binding were dropped in behind ``AsrBackend``.
 """
 
 from __future__ import annotations
@@ -240,7 +239,7 @@ def _slip_digit(token: str, rng: random.Random) -> str:
 def _spell_out_identifier(token: str) -> List[str]:
     """Turn ``gb-4471`` into ``gb forty four seventy one``.
 
-    This is the out-of-vocabulary failure the spec names: the identifier
+    This is the out-of-vocabulary failure this models: the identifier
     survives acoustically but is written as narrative, so the structured field
     is simply gone while WER records only a handful of word errors.
     """

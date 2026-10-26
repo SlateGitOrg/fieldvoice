@@ -65,8 +65,6 @@ System A gets fewer words wrong, but every error is on a field (`GB-4471` to `GB
 
 ## Results
 
-## Results
-
 All numbers below are printed by `python -m src.demo`.
 
 ### The headline: the ranking flips
@@ -181,8 +179,7 @@ All numbers are measured on the simulated backend, not a real model.
   constrained; quantities, dates and locations are not.
 - **Offline** is asserted by a test that patches out `socket` connect /
   resolve and runs the pipeline, plus a scan for network imports in `src/`.
-- **Not implemented from the spec:** real ASR, the PWA, deferred sync, SQLite
-  persistence, and the Ollama structuring step.
+- **Scope.** There is no real ASR, persistence or structuring step; the repository covers the interface and the evaluation.
 
 ## Testing
 
@@ -209,7 +206,7 @@ docs/              architecture notes
 
 - Not a general transcription service; the constraint is the point.
 - Not cloud-dependent; the offline requirement drives the design.
-- No real ASR, PWA, deferred sync, SQLite persistence or local-LLM structuring step.
+- Not an app: no UI, storage or sync layer.
 
 ## License
 
